@@ -134,14 +134,14 @@
       <main class="card">
         <p class="eyebrow">Canvas extension</p>
         <h1>Mona's Octoverse Arcade</h1>
-        <p>Help Mona the Octocat ship commits and squash the backlog. Copilot is riding along with tips.</p>
+        <p>Fly Mona the Octocat down the commit tunnel: ship what comes at you and dodge the bugs. Copilot is riding along with tips.</p>
         <ul class="legend">
-          <li><span class="sw" style="background:#3fb950"></span>Commit squares: catch them for points. Chain them for a merge combo.</li>
-          <li><span class="sw" style="background:#f85149"></span>Bugs: dodge them, each hit costs a life.</li>
+          <li><span class="sw" style="background:#3fb950"></span>Commit squares: fly through them for points. Chain them for a merge combo.</li>
+          <li><span class="sw" style="background:#f85149"></span>Bugs: they come straight at you. Each hit costs a life.</li>
           <li><span class="sw" style="background:#58a6ff"></span>Branch protection: a shield that blocks one bug.</li>
           <li><span class="sw" style="background:#bc8cff"></span>Pull request magnet: commits come to you.</li>
         </ul>
-        <p class="keys">Move with arrows / WASD, or drag on the playfield. P pauses, M mutes.</p>
+        <p class="keys">Move in every direction with arrows / WASD, or drag on the playfield. P pauses, M mutes.</p>
         <button id="play" class="primary" type="button">Start game</button>
       </main>
     </div>
@@ -183,6 +183,8 @@
     const MAX_LIVES = 3;
     const LEVEL_SECONDS = 20;
     const POWER_SECONDS = 8;
+    // The tunnel: the camera sits CAM units behind Mona's plane (z = 0); things are born at FAR.
+    const CAM = 4, FAR = 18, FLOOR = 1.4, ROW = 1.5, COLS = 4, COL_W = 0.8;
     const COMMIT_SHADES = ["#0e4429", "#006d32", "#26a641", "#39d353"];
     const TIPS = [
       "Nice! Small commits, big wins.",
@@ -207,15 +209,33 @@
 
     // ---- sound, generated with WebAudio (no external assets)
     const sound = {
-      ctx: null, muted: false,
+      ctx: null, master: null, engine: null, muted: false,
       ensure() {
         if (!this.ctx) {
           const AC = window.AudioContext || window.webkitAudioContext;
-          if (AC) this.ctx = new AC();
+          if (!AC) return;
+          this.ctx = new AC();
+          this.master = this.ctx.createGain();
+          this.master.gain.value = 1;
+          this.master.connect(this.ctx.destination);
+          // the engine hum, pitched up with the speed; silent until the game runs
+          const osc = this.ctx.createOscillator(), lp = this.ctx.createBiquadFilter(), g = this.ctx.createGain();
+          osc.type = "sawtooth"; osc.frequency.value = 50;
+          lp.type = "lowpass"; lp.frequency.value = 260;
+          g.gain.value = 0;
+          osc.connect(lp).connect(g).connect(this.master);
+          osc.start();
+          this.engine = { osc, g };
         }
-        if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+        if (this.ctx.state === "suspended") this.ctx.resume();
       },
-      tone(freq, dur = 0.08, type = "square", vol = 0.05, slide = 0) {
+      hum(on, speed) {
+        if (!this.engine) return;
+        const t = this.ctx.currentTime;
+        this.engine.g.gain.setTargetAtTime(on && !this.muted ? 0.07 : 0, t, 0.15);
+        this.engine.osc.frequency.setTargetAtTime(50 + (speed - 1) * 28, t, 0.3);
+      },
+      tone(freq, dur = 0.08, type = "square", vol = 0.15, slide = 0) {
         if (this.muted || !this.ctx) return;
         const t = this.ctx.currentTime;
         const o = this.ctx.createOscillator();
@@ -225,20 +245,20 @@
         if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), t + dur);
         g.gain.setValueAtTime(vol, t);
         g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-        o.connect(g).connect(this.ctx.destination);
+        o.connect(g).connect(this.master);
         o.start(t);
         o.stop(t + dur + 0.02);
       },
-      collect(combo) { this.tone(520 + Math.min(combo, 20) * 30, 0.07, "square", 0.04); },
-      hit() { this.tone(220, 0.3, "sawtooth", 0.07, -160); },
-      power() { [440, 660, 880].forEach((f, i) => setTimeout(() => this.tone(f, 0.09, "triangle", 0.06), i * 70)); },
-      tip() { [660, 990].forEach((f, i) => setTimeout(() => this.tone(f, 0.1, "sine", 0.06), i * 90)); },
-      level() { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this.tone(f, 0.1, "triangle", 0.05), i * 80)); },
-      over() { [392, 330, 262, 196].forEach((f, i) => setTimeout(() => this.tone(f, 0.18, "sawtooth", 0.05), i * 150)); },
+      collect(combo) { this.tone(520 + Math.min(combo, 20) * 30, 0.08, "square", 0.14); },
+      hit() { this.tone(220, 0.35, "sawtooth", 0.24, -160); this.tone(90, 0.3, "square", 0.18, -40); },
+      power() { [440, 660, 880].forEach((f, i) => setTimeout(() => this.tone(f, 0.1, "triangle", 0.2), i * 70)); },
+      tip() { [660, 990].forEach((f, i) => setTimeout(() => this.tone(f, 0.12, "sine", 0.2), i * 90)); },
+      level() { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this.tone(f, 0.12, "triangle", 0.18), i * 80)); },
+      over() { [392, 330, 262, 196].forEach((f, i) => setTimeout(() => this.tone(f, 0.2, "sawtooth", 0.18), i * 150)); },
     };
 
-    // ---- layout
-    let W = 0, H = 0, DPR = 1;
+    // ---- layout and projection
+    let W = 0, H = 0, DPR = 1, CX = 0, HY = 0, SX = 0, SY = 0;
     function resize() {
       const r = canvas.getBoundingClientRect();
       DPR = Math.min(window.devicePixelRatio || 1, 2);
@@ -247,17 +267,20 @@
       canvas.width = Math.round(W * DPR);
       canvas.height = Math.round(H * DPR);
       ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-      if (game.mona) {
-        game.mona.x = clamp(game.mona.x, game.mona.r, W - game.mona.r);
-        game.mona.y = clamp(game.mona.y, game.mona.r, H - game.mona.r);
-      }
-      buildBackdrop();
+      CX = W / 2; HY = H * 0.46;       // the vanishing point
+      SX = W * 0.42; SY = H * 0.30;    // world unit → pixels on Mona's plane
+    }
+    // World: x and y in about [-1, 1] on Mona's plane, z the depth ahead of her.
+    const scaleAt = (z) => CAM / (CAM + z);
+    function project(x, y, z) {
+      const s = scaleAt(z);
+      return { x: CX + x * SX * s, y: HY + y * SY * s, s };
     }
 
     // ---- state
     const game = {
       state: "menu", // menu | playing | paused | over
-      score: 0, best: store.get(), lives: MAX_LIVES, time: 0, level: 1,
+      score: 0, best: store.get(), lives: MAX_LIVES, time: 0, level: 1, dist: 0,
       combo: 0, bestCombo: 0, caught: 0, tipsShown: 0,
       mona: null, items: [], particles: [], floaters: [],
       spawn: { commit: 0, bug: 0, power: 0 },
@@ -272,13 +295,13 @@
     const multiplier = () => Math.min(1 + Math.floor(game.combo / 5), 5);
 
     function reset() {
-      game.score = 0; game.lives = MAX_LIVES; game.time = 0; game.level = 1;
+      game.score = 0; game.lives = MAX_LIVES; game.time = 0; game.level = 1; game.dist = 0;
       game.combo = 0; game.bestCombo = 0; game.caught = 0; game.tipsShown = 0;
       game.items = []; game.particles = []; game.floaters = [];
-      game.spawn = { commit: 0.3, bug: 1.2, power: rand(10, 16) };
+      game.spawn = { commit: 0.3, bug: 1.4, power: rand(10, 16) };
       game.shield = 0; game.magnet = 0; game.invuln = 0; game.shake = 0;
-      game.mona = { x: W / 2, y: H - 70, r: 22, vx: 0, vy: 0, blink: 2, face: 1 };
-      say("Let's ship it! Catch the green commits, dodge the red bugs.");
+      game.mona = { x: 0, y: 0.45, r: 26, vx: 0, vy: 0, blink: 2, face: 1 };
+      say("Let's ship it! Fly through the green commits, dodge the red bugs.");
       updateHud();
     }
 
@@ -294,6 +317,7 @@
       ui.paused.hidden = s !== "paused";
       ui.over.hidden = s !== "over";
       document.body.dataset.state = s;
+      sound.hum(s === "playing", speedMul());
       const focusTarget = { menu: "#play", paused: "#resume", over: "#restart" }[s];
       if (focusTarget) $(focusTarget).focus();
       else canvas.focus?.();
@@ -304,20 +328,26 @@
       else if (game.state === "paused") { setState("playing"); last = performance.now(); }
     }
 
-    // ---- spawning
+    // ---- spawning: everything is born far down the tunnel and flies at the camera
     function spawnItem(type) {
       const m = speedMul();
-      const base = { x: 0, y: -30, t: 0, type };
+      const it = { type, x: rand(-1, 1), y: rand(-0.9, 1), z: FAR, t: 0 };
       if (type === "commit") {
-        Object.assign(base, { s: 22, vy: rand(90, 140) * m, shade: COMMIT_SHADES[(Math.random() * 4) | 0] });
+        Object.assign(it, { s: 30, vz: rand(5, 7) * m, shade: COMMIT_SHADES[(Math.random() * 4) | 0] });
       } else if (type === "bug") {
-        Object.assign(base, { s: 26, vy: rand(110, 170) * m, wob: rand(0.6, 1.6), amp: rand(20, 60) * (Math.random() < .5 ? -1 : 1) });
+        // most bugs aim where Mona is now; a few drift in and weave
+        const aimed = Math.random() < 0.65;
+        Object.assign(it, {
+          s: 34, vz: rand(6, 8.5) * m,
+          x: aimed ? game.mona.x + rand(-0.25, 0.25) : it.x,
+          y: aimed ? game.mona.y + rand(-0.25, 0.25) : it.y,
+          wob: rand(0.6, 1.6), amp: rand(0.12, 0.35) * (Math.random() < .5 ? -1 : 1), home: aimed ? rand(0.3, 0.9) : 0,
+        });
       } else {
-        Object.assign(base, { s: 26, vy: rand(80, 110) * Math.sqrt(m) });
+        Object.assign(it, { s: 32, vz: rand(4.5, 5.5) * Math.sqrt(m) });
       }
-      base.x = rand(base.s, W - base.s);
-      base.x0 = base.x;
-      game.items.push(base);
+      it.x0 = it.x;
+      game.items.push(it);
     }
 
     // ---- loop
@@ -333,41 +363,43 @@
 
     function update(dt) {
       game.time += dt;
+      const m = speedMul();
+      game.dist += 6 * m * dt;
       const newLevel = 1 + Math.floor(game.time / LEVEL_SECONDS);
       if (newLevel > game.level) {
         game.level = newLevel;
         toast(`Level ${game.level}: speed up!`);
         sound.level();
+        sound.hum(true, m);
       }
 
       // spawn timers shrink as the game speeds up
-      const m = speedMul();
       game.spawn.commit -= dt;
       game.spawn.bug -= dt;
       game.spawn.power -= dt;
-      if (game.spawn.commit <= 0) { spawnItem("commit"); game.spawn.commit = rand(0.55, 0.95) / Math.sqrt(m); }
-      if (game.spawn.bug <= 0) { spawnItem("bug"); game.spawn.bug = rand(0.9, 1.5) / m; }
+      if (game.spawn.commit <= 0) { spawnItem("commit"); game.spawn.commit = rand(0.5, 0.9) / Math.sqrt(m); }
+      if (game.spawn.bug <= 0) { spawnItem("bug"); game.spawn.bug = rand(1.0, 1.6) / m; }
       if (game.spawn.power <= 0) { spawnItem(Math.random() < 0.5 ? "shield" : "magnet"); game.spawn.power = rand(14, 22); }
 
-      // Mona
+      // Mona flies on her plane, in world units per second
       const mona = game.mona;
-      const sp = 380;
+      const sp = 2.6;
       let ax = (keys.has("right") ? 1 : 0) - (keys.has("left") ? 1 : 0);
       let ay = (keys.has("down") ? 1 : 0) - (keys.has("up") ? 1 : 0);
       if (ax || ay) {
         const n = Math.hypot(ax, ay);
         mona.vx = (ax / n) * sp; mona.vy = (ay / n) * sp;
       } else if (pointer.active) {
-        const dx = pointer.x - mona.x, dy = pointer.y - 30 - mona.y;
-        const d = Math.hypot(dx, dy);
-        const v = Math.min(d * 9, sp * 1.4);
-        mona.vx = d > 1 ? (dx / d) * v : 0; mona.vy = d > 1 ? (dy / d) * v : 0;
+        const tx = clamp((pointer.x - CX) / SX, -1, 1), ty = clamp((pointer.y - HY) / SY, -0.9, 1.1);
+        const dx = tx - mona.x, dy = ty - mona.y, d = Math.hypot(dx, dy);
+        const v = Math.min(d * 10, sp * 1.5);
+        mona.vx = d > 0.01 ? (dx / d) * v : 0; mona.vy = d > 0.01 ? (dy / d) * v : 0;
       } else {
         mona.vx *= 0.8; mona.vy *= 0.8;
       }
-      mona.x = clamp(mona.x + mona.vx * dt, mona.r, W - mona.r);
-      mona.y = clamp(mona.y + mona.vy * dt, mona.r + 10, H - mona.r);
-      if (Math.abs(mona.vx) > 20) mona.face = Math.sign(mona.vx);
+      mona.x = clamp(mona.x + mona.vx * dt, -1, 1);
+      mona.y = clamp(mona.y + mona.vy * dt, -0.9, 1.1);
+      if (Math.abs(mona.vx) > 0.15) mona.face = Math.sign(mona.vx);
       mona.blink -= dt;
       if (mona.blink < -0.12) mona.blink = rand(2, 4.5);
 
@@ -375,20 +407,24 @@
       game.shield = Math.max(0, game.shield - dt);
       game.magnet = Math.max(0, game.magnet - dt);
 
-      // items
+      // items fly toward the camera; the hit test happens as they cross Mona's plane
+      const mp = project(mona.x, mona.y, 0);
       for (const it of game.items) {
         it.t += dt;
-        it.y += it.vy * dt;
-        if (it.type === "bug") it.x = clamp(it.x0 + Math.sin(it.t * it.wob * 3) * it.amp, it.s, W - it.s);
-        if (it.type === "commit" && game.magnet > 0) {
-          const dx = mona.x - it.x, dy = mona.y - it.y, d = Math.hypot(dx, dy);
-          if (d < 190) { it.x += (dx / d) * 320 * dt; it.y += (dy / d) * 320 * dt; }
+        it.z -= it.vz * dt;
+        if (it.type === "bug") {
+          if (it.home && it.z > 2) it.x0 += (mona.x - it.x0) * it.home * dt;
+          it.x = clamp(it.x0 + Math.sin(it.t * it.wob * 3) * it.amp, -1.1, 1.1);
         }
-        const hitR = it.type === "commit" ? it.s * 0.7 + mona.r * 0.9 : it.s * 0.45 + mona.r * 0.75;
-        if (Math.hypot(it.x - mona.x, it.y - mona.y) < hitR) {
-          it.dead = true;
-          onTouch(it);
-        } else if (it.y > H + 40) {
+        if (it.type === "commit" && game.magnet > 0 && it.z < 7) {
+          it.x += (mona.x - it.x) * 4 * dt; it.y += (mona.y - it.y) * 4 * dt;
+        }
+        if (it.z < 0.6 && it.z > -0.6) {
+          const p = project(it.x, it.y, Math.max(it.z, 0));
+          const hitR = it.type === "commit" ? it.s * 0.6 + mona.r * 0.9 : it.s * 0.4 + mona.r * 0.7;
+          if (Math.hypot(p.x - mp.x, p.y - mp.y) < hitR) { it.dead = true; onTouch(it, p); }
+        }
+        if (it.z <= -1.2) {
           it.dead = true;
           if (it.type === "commit" && game.combo > 0) { game.combo = 0; updateHud(); }
         }
@@ -406,7 +442,7 @@
       game.shake = Math.max(0, game.shake - dt * 30);
     }
 
-    function onTouch(it) {
+    function onTouch(it, p) {
       const mona = game.mona;
       if (it.type === "commit") {
         const before = game.score;
@@ -415,8 +451,8 @@
         game.bestCombo = Math.max(game.bestCombo, game.combo);
         game.caught += 1;
         game.score += pts;
-        burst(it.x, it.y, it.shade === COMMIT_SHADES[0] ? "#26a641" : it.shade, 10);
-        floater(it.x, it.y, `+${pts}`, "#3fb950");
+        burst(p.x, p.y, it.shade === COMMIT_SHADES[0] ? "#26a641" : it.shade, 12);
+        floater(p.x, p.y - 20, `+${pts}`, "#3fb950");
         sound.collect(game.combo);
         if (game.combo > 0 && game.combo % 5 === 0 && multiplier() > 1) toast(`Merge combo x${multiplier()}!`);
         if (Math.floor(game.score / 10) > Math.floor(before / 10)) copilotTip();
@@ -424,24 +460,25 @@
         if (game.invuln > 0) return;
         if (game.shield > 0) {
           game.shield = 0;
-          burst(it.x, it.y, "#58a6ff", 16);
-          floater(it.x, it.y, "Blocked!", "#58a6ff");
+          burst(p.x, p.y, "#58a6ff", 18);
+          floater(p.x, p.y - 20, "Blocked!", "#58a6ff");
           sound.power();
           game.invuln = 0.6;
         } else {
+          const mp = project(mona.x, mona.y, 0);
           game.lives -= 1;
           game.combo = 0;
           game.invuln = 1.4;
-          game.shake = 10;
-          burst(mona.x, mona.y, "#f85149", 18);
-          floater(mona.x, mona.y - 30, "Bug!", "#f85149");
+          game.shake = 12;
+          burst(mp.x, mp.y, "#f85149", 22);
+          floater(mp.x, mp.y - 40, "Bug!", "#f85149");
           sound.hit();
           if (game.lives > 0) say(game.lives === 1 ? "Last life! I believe in you, Mona." : "Ouch, a bug! Shake it off, we've got this.");
         }
       } else {
         game[it.type] = POWER_SECONDS;
-        burst(it.x, it.y, it.type === "shield" ? "#58a6ff" : "#bc8cff", 16);
-        floater(it.x, it.y, it.type === "shield" ? "Branch protection!" : "PR magnet!", it.type === "shield" ? "#58a6ff" : "#bc8cff");
+        burst(p.x, p.y, it.type === "shield" ? "#58a6ff" : "#bc8cff", 18);
+        floater(p.x, p.y - 20, it.type === "shield" ? "Branch protection!" : "PR magnet!", it.type === "shield" ? "#58a6ff" : "#bc8cff");
         sound.power();
       }
       updateHud();
@@ -499,59 +536,103 @@
     }
     setInterval(() => { if (game.state === "playing") updateHud(); }, 250);
 
-    // ---- effects
+    // ---- effects (screen space)
     function burst(x, y, color, n) {
       for (let i = 0; i < n; i++) {
-        const a = rand(0, Math.PI * 2), v = rand(60, 220);
+        const a = rand(0, Math.PI * 2), v = rand(60, 240);
         game.particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 80, t: 0, life: rand(0.4, 0.8), color, s: rand(2, 5) });
       }
     }
     function floater(x, y, text, color) { game.floaters.push({ x, y, text, color, t: 0 }); }
 
     // ---- drawing
-    let backdrop = null;
-    function buildBackdrop() {
-      backdrop = document.createElement("canvas");
-      backdrop.width = canvas.width; backdrop.height = canvas.height;
-      const b = backdrop.getContext("2d");
-      b.setTransform(DPR, 0, 0, DPR, 0, 0);
-      const g = b.createLinearGradient(0, 0, 0, H);
-      g.addColorStop(0, "#0d1117"); g.addColorStop(1, "#111a2b");
-      b.fillStyle = g; b.fillRect(0, 0, W, H);
-      // a faint contribution-graph grid
-      const cell = 16;
-      for (let y = 6; y < H; y += cell) {
-        for (let x = 6; x < W; x += cell) {
-          const r = Math.random();
-          b.fillStyle = r > 0.97 ? "rgba(57,211,83,.10)" : r > 0.9 ? "rgba(38,166,65,.06)" : "rgba(110,118,129,.05)";
-          b.fillRect(x, y, cell - 4, cell - 4);
+    // Stars streak past in 3D, outside the tunnel walls.
+    const stars = Array.from({ length: 90 }, () => ({ x: rand(-3.5, 3.5), y: rand(-2.6, 2.6), z: rand(0, FAR) }));
+    // A lit cell of the tunnel floor/ceiling, decided once per cell so the pattern scrolls steadily.
+    const lit = (row, col) => { const h = Math.sin(row * 127.1 + col * 311.7) * 43758.5453; return h - Math.floor(h); };
+
+    function drawTunnel(t) {
+      const m = game.state === "playing" ? speedMul() : 1;
+      const scroll = game.dist % ROW;
+      for (const side of [FLOOR, -FLOOR]) {
+        // the cells, far to near
+        const rowBase = Math.floor(game.dist / ROW);
+        for (let i = Math.ceil((FAR + scroll) / ROW); i >= 0; i--) {
+          const z0 = i * ROW - scroll, z1 = z0 + ROW;
+          if (z1 <= -CAM + 0.3 || z0 > FAR) continue;
+          const row = rowBase + i;
+          const zn = Math.max(z0, -CAM + 0.3);
+          for (let c = -COLS; c < COLS; c++) {
+            const v = lit(row, c + side * 10);
+            if (v < 0.72) continue;
+            const a = project(c * COL_W, side, zn), b = project((c + 1) * COL_W, side, zn);
+            const d = project((c + 1) * COL_W, side, z1), e = project(c * COL_W, side, z1);
+            // born dim at the far end, full on Mona's plane, gone again just behind the camera
+            const fade = clamp((FAR - z0) / 6, 0, 1) * clamp((z1 + 3) / 3, 0, 1) * (side > 0 ? 1 : 0.55);
+            ctx.fillStyle = v > 0.93 ? `rgba(57,211,83,${0.42 * fade})` : v > 0.84 ? `rgba(38,166,65,${0.3 * fade})` : `rgba(0,109,50,${0.3 * fade})`;
+            ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(d.x, d.y); ctx.lineTo(e.x, e.y); ctx.closePath(); ctx.fill();
+          }
+        }
+        // the grid lines
+        ctx.lineWidth = 1;
+        for (let i = Math.ceil((FAR + scroll) / ROW); i >= 0; i--) {
+          const z = i * ROW - scroll;
+          if (z <= -CAM + 0.3 || z > FAR) continue;
+          const a = project(-COLS * COL_W, side, z), b = project(COLS * COL_W, side, z);
+          const fade = clamp((FAR - z) / 6, 0, 1) * clamp((z + 3) / 3, 0, 1) * (side > 0 ? 0.5 : 0.28);
+          ctx.strokeStyle = `rgba(63,185,80,${fade})`;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+        }
+        for (let c = -COLS; c <= COLS; c++) {
+          const a = project(c * COL_W, side, FAR), b = project(c * COL_W, side, -CAM + 0.3);
+          const g = ctx.createLinearGradient(a.x, a.y, b.x, b.y);
+          g.addColorStop(0, "rgba(63,185,80,0)"); g.addColorStop(1, `rgba(63,185,80,${side > 0 ? 0.5 : 0.28})`);
+          ctx.strokeStyle = g;
+          ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
         }
       }
+      // stars outside the tunnel
+      ctx.strokeStyle = "rgba(201,209,217,.6)"; ctx.lineCap = "round";
+      for (const s of stars) {
+        if (game.state !== "paused") s.z -= 9 * m * (1 / 60);
+        if (s.z < -CAM + 0.5) { s.z = FAR; s.x = rand(-3.5, 3.5); s.y = rand(-2.6, 2.6); }
+        const a = project(s.x, s.y, s.z), b = project(s.x, s.y, Math.min(s.z + 0.5 * m, FAR));
+        ctx.globalAlpha = clamp((FAR - s.z) / 8, 0, 1) * 0.7;
+        ctx.lineWidth = 1 + a.s;
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      // the glow at the end of the tunnel
+      const glow = ctx.createRadialGradient(CX, HY, 0, CX, HY, Math.min(W, H) * 0.35);
+      glow.addColorStop(0, "rgba(57,211,83,.28)"); glow.addColorStop(1, "rgba(57,211,83,0)");
+      ctx.fillStyle = glow; ctx.fillRect(0, 0, W, H);
     }
-
-    const stars = Array.from({ length: 60 }, () => ({ x: Math.random(), y: Math.random(), z: rand(0.2, 1) }));
 
     function draw(t) {
       ctx.save();
       if (game.shake > 0) ctx.translate(rand(-1, 1) * game.shake, rand(-1, 1) * game.shake);
-      if (backdrop) ctx.drawImage(backdrop, 0, 0, W, H);
-      else { ctx.fillStyle = "#0d1117"; ctx.fillRect(0, 0, W, H); }
+      const bg = ctx.createLinearGradient(0, 0, 0, H);
+      bg.addColorStop(0, "#0d1117"); bg.addColorStop(1, "#0f1a2c");
+      ctx.fillStyle = bg; ctx.fillRect(-20, -20, W + 40, H + 40);
 
-      // drifting stars, faster with speed
-      const m = game.state === "playing" ? speedMul() : 1;
-      for (const s of stars) {
-        const y = ((s.y * H + t * 30 * s.z * m) % H);
-        ctx.fillStyle = `rgba(201,209,217,${0.25 * s.z})`;
-        ctx.fillRect(s.x * W, y, 2 * s.z, 2 * s.z + m * s.z);
-      }
+      drawTunnel(t);
 
-      for (const it of game.items) {
+      // far things first; Mona sits at z = 0 and is drawn in her turn
+      const items = game.items.slice().sort((a, b) => b.z - a.z);
+      let monaDrawn = false;
+      for (const it of items) {
+        if (!monaDrawn && it.z < 0 && game.mona) { drawMona(game.mona, t); monaDrawn = true; }
+        const p = project(it.x, it.y, Math.max(it.z, -CAM + 0.6));
+        ctx.save();
+        ctx.globalAlpha = clamp((FAR - it.z) / 4, 0, 1) * (it.z < -0.4 ? clamp((1.2 + it.z) / 0.8, 0, 1) : 1);
+        ctx.translate(p.x, p.y);
+        ctx.scale(p.s, p.s);
         if (it.type === "commit") drawCommit(it, t);
         else if (it.type === "bug") drawBug(it, t);
         else drawPower(it, t);
+        ctx.restore();
       }
-
-      if (game.mona) drawMona(game.mona, t);
+      if (!monaDrawn && game.mona) drawMona(game.mona, t);
 
       for (const p of game.particles) {
         ctx.globalAlpha = 1 - p.t / p.life;
@@ -580,27 +661,24 @@
       ctx.closePath();
     }
 
+    // The item painters draw around (0, 0) at full size; draw() scales them by depth.
     function drawCommit(it, t) {
-      const s = it.s, pulse = 1 + Math.sin(t * 6 + it.x) * 0.05;
-      ctx.save();
-      ctx.translate(it.x, it.y);
+      const s = it.s, pulse = 1 + Math.sin(t * 6 + it.x0 * 10) * 0.05;
       ctx.scale(pulse, pulse);
-      ctx.shadowColor = "#39d353"; ctx.shadowBlur = game.magnet > 0 ? 16 : 8;
+      ctx.rotate(it.t * 0.8);
+      ctx.shadowColor = "#39d353"; ctx.shadowBlur = game.magnet > 0 ? 18 : 10;
       ctx.fillStyle = it.shade === COMMIT_SHADES[0] ? "#26a641" : it.shade;
-      roundRect(-s / 2, -s / 2, s, s, 4); ctx.fill();
+      roundRect(-s / 2, -s / 2, s, s, 5); ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(255,255,255,.25)"; ctx.lineWidth = 1.5;
-      roundRect(-s / 2 + 1, -s / 2 + 1, s - 2, s - 2, 3); ctx.stroke();
-      ctx.restore();
+      ctx.strokeStyle = "rgba(255,255,255,.3)"; ctx.lineWidth = 2;
+      roundRect(-s / 2 + 2, -s / 2 + 2, s - 4, s - 4, 4); ctx.stroke();
     }
 
     function drawBug(it, t) {
       const s = it.s;
-      ctx.save();
-      ctx.translate(it.x, it.y);
       ctx.rotate(Math.sin(it.t * it.wob * 3) * 0.25);
-      ctx.strokeStyle = "#f85149"; ctx.lineWidth = 2; ctx.lineCap = "round";
-      const wig = Math.sin(t * 20 + it.x) * 3;
+      ctx.strokeStyle = "#f85149"; ctx.lineWidth = 2.5; ctx.lineCap = "round";
+      const wig = Math.sin(t * 20 + it.x0 * 10) * 3;
       for (const side of [-1, 1]) {
         for (let i = -1; i <= 1; i++) {
           ctx.beginPath();
@@ -613,7 +691,7 @@
         ctx.quadraticCurveTo(side * s * 0.3, s * 0.65, side * s * 0.38, s * 0.62);
         ctx.stroke();
       }
-      ctx.shadowColor = "#f85149"; ctx.shadowBlur = 10;
+      ctx.shadowColor = "#f85149"; ctx.shadowBlur = 12;
       ctx.fillStyle = "#da3633";
       ctx.beginPath(); ctx.ellipse(0, 0, s * 0.32, s * 0.4, 0, 0, Math.PI * 2); ctx.fill();
       ctx.shadowBlur = 0;
@@ -622,48 +700,51 @@
       ctx.strokeStyle = "#8e1519"; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.moveTo(0, -s * 0.38); ctx.lineTo(0, s * 0.2); ctx.stroke();
       ctx.fillStyle = "#fff";
-      ctx.beginPath(); ctx.arc(-s * 0.08, s * 0.38, 2, 0, Math.PI * 2); ctx.arc(s * 0.08, s * 0.38, 2, 0, Math.PI * 2); ctx.fill();
-      ctx.restore();
+      ctx.beginPath(); ctx.arc(-s * 0.08, s * 0.38, 2.2, 0, Math.PI * 2); ctx.arc(s * 0.08, s * 0.38, 2.2, 0, Math.PI * 2); ctx.fill();
     }
 
     function drawPower(it, t) {
       const isShield = it.type === "shield";
       const color = isShield ? "#58a6ff" : "#bc8cff";
-      ctx.save();
-      ctx.translate(it.x, it.y + Math.sin(t * 4) * 3);
-      ctx.shadowColor = color; ctx.shadowBlur = 18;
-      ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+      ctx.translate(0, Math.sin(t * 4) * 3);
+      ctx.shadowColor = color; ctx.shadowBlur = 20;
+      ctx.strokeStyle = color; ctx.lineWidth = 3;
       ctx.beginPath(); ctx.arc(0, 0, it.s * 0.62, 0, Math.PI * 2); ctx.stroke();
       ctx.shadowBlur = 0;
       ctx.fillStyle = color;
       if (isShield) {
         ctx.beginPath();
-        ctx.moveTo(0, -10); ctx.lineTo(9, -6); ctx.lineTo(8, 3); ctx.quadraticCurveTo(5, 9, 0, 11);
-        ctx.quadraticCurveTo(-5, 9, -8, 3); ctx.lineTo(-9, -6); ctx.closePath(); ctx.fill();
+        ctx.moveTo(0, -11); ctx.lineTo(10, -7); ctx.lineTo(9, 3); ctx.quadraticCurveTo(5, 10, 0, 12);
+        ctx.quadraticCurveTo(-5, 10, -9, 3); ctx.lineTo(-10, -7); ctx.closePath(); ctx.fill();
       } else {
         // a pull-request glyph: two nodes joined by a branch
-        ctx.lineWidth = 2.5; ctx.strokeStyle = color;
-        ctx.beginPath(); ctx.arc(-5, -7, 3, 0, Math.PI * 2); ctx.arc(-5, 8, 3, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(6, 8, 3, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.moveTo(-5, -4); ctx.lineTo(-5, 5); ctx.stroke();
-        ctx.beginPath(); ctx.moveTo(6, 5); ctx.lineTo(6, -3); ctx.quadraticCurveTo(6, -7, 1, -7); ctx.stroke();
+        ctx.beginPath(); ctx.arc(-6, -8, 3.2, 0, Math.PI * 2); ctx.arc(-6, 9, 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(7, 9, 3.2, 0, Math.PI * 2); ctx.fill();
+        ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(-6, -4); ctx.lineTo(-6, 5); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(7, 5); ctx.lineTo(7, -3); ctx.quadraticCurveTo(7, -8, 1, -8); ctx.stroke();
       }
-      ctx.restore();
     }
 
     function drawMona(m, t) {
       const r = m.r;
+      const p = project(m.x, m.y, 0);
       ctx.save();
-      ctx.translate(m.x, m.y);
+      // her shadow on the floor of the tunnel
+      const sh = project(m.x, FLOOR, 0);
+      ctx.fillStyle = "rgba(0,0,0,.35)";
+      ctx.beginPath(); ctx.ellipse(sh.x, sh.y, r * 0.9, r * 0.22, 0, 0, Math.PI * 2); ctx.fill();
+
+      ctx.translate(p.x, p.y);
       if (game.invuln > 0 && Math.floor(t * 12) % 2 === 0) ctx.globalAlpha = 0.35;
-      const tilt = clamp(m.vx / 1200, -0.25, 0.25);
+      const tilt = clamp(m.vx / 6, -0.35, 0.35);   // she banks into the turn
       ctx.rotate(tilt);
 
-      // tentacles under the head
+      // tentacles trail behind, pushed by the wind of the tunnel
       ctx.strokeStyle = "#e6edf3"; ctx.lineWidth = 4; ctx.lineCap = "round";
       for (let i = 0; i < 5; i++) {
         const bx = (i - 2) * r * 0.32;
-        const sway = Math.sin(t * 8 + i * 1.3) * 4;
+        const sway = Math.sin(t * 10 + i * 1.3) * 4 - m.vx * 3;
         ctx.beginPath();
         ctx.moveTo(bx, r * 0.55);
         ctx.quadraticCurveTo(bx + sway, r * 0.95, bx + sway * 1.6 + (i - 2) * 3, r * 1.25);
@@ -714,9 +795,9 @@
         ctx.beginPath(); ctx.arc(0, r * 0.1, r * 1.55, 0, Math.PI * 2); ctx.stroke();
       }
       if (game.magnet > 0) {
-        ctx.strokeStyle = "rgba(188,140,255,.35)"; ctx.lineWidth = 2; ctx.setLineDash([6, 8]);
+        ctx.strokeStyle = "rgba(188,140,255,.4)"; ctx.lineWidth = 2; ctx.setLineDash([6, 8]);
         ctx.lineDashOffset = -t * 40;
-        ctx.beginPath(); ctx.arc(0, 0, 190 * (0.9 + Math.sin(t * 3) * 0.05), 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.arc(0, 0, r * 3.2 * (0.9 + Math.sin(t * 3) * 0.05), 0, Math.PI * 2); ctx.stroke();
         ctx.setLineDash([]);
       }
       ctx.restore();
@@ -749,6 +830,7 @@
       sound.muted = !sound.muted;
       ui.mute.textContent = sound.muted ? "🔇" : "🔊";
       ui.mute.setAttribute("aria-pressed", String(sound.muted));
+      sound.hum(game.state === "playing", speedMul());
     }
     ui.mute.addEventListener("click", toggleMute);
     $("#pause").addEventListener("click", togglePause);
@@ -756,8 +838,8 @@
     $("#restart").addEventListener("click", start);
     $("#resume").addEventListener("click", togglePause);
 
-    // read-only peek at the state, for debugging and automated checks
-    Object.defineProperty(window, "monaArcade", { value: { get state() { return game; } } });
+    // read-only peek at the state and the projection, for debugging and automated checks
+    Object.defineProperty(window, "monaArcade", { value: { get state() { return game; }, project } });
 
     new ResizeObserver(resize).observe(canvas);
     resize();
