@@ -1,0 +1,39 @@
+# A verificação do repositório no GitHub (CI). Copie como .github/workflows/verificacao.yml.
+# A cada envio à main e a cada pull request, roda a mesma verificação local (scripts/check.sh,
+# que valida também os specs e as changes do OpenSpec) e a busca de senhas e chaves no histórico.
+# O merge de uma change só com tudo verde. As ações vão fixadas pelo commit (o Dependabot as
+# atualiza), e o gitleaks é conferido pela soma publicada na versão dele.
+name: verificacao
+
+on:
+  push:
+    branches: [main, master]  # a branch principal; repositórios antigos usam master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # o histórico inteiro, para a busca de segredos
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: "22"
+      - name: OpenSpec, na versão do kit
+        run: npm install -g @fission-ai/openspec@1.15.0
+      # Parte da stack, decidida no TDD e posta na change 01: o que o check.sh precisa para rodar o lint,
+      # os tipos e os testes. Troque o comentário pelos passos reais. Exemplo para Python com uv:
+      #   - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7  # v10.2.0
+      #   - run: uv sync
+      - name: A verificação do repositório
+        run: bash scripts/check.sh
+      - name: Senhas e chaves no histórico (gitleaks)
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/gitleaks.tar.gz" https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  $RUNNER_TEMP/gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/gitleaks.tar.gz" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" detect --source . --no-banner --redact

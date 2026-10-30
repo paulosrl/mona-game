@@ -1,0 +1,771 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mona's Octoverse Arcade</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 16px/1.5 system-ui, sans-serif;
+      background: #0d1117;
+      color: #e6edf3;
+      --green: #3fb950;
+      --red: #f85149;
+      --blue: #58a6ff;
+      --purple: #bc8cff;
+      --panel: #161b22;
+      --border: #30363d;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body { display: flex; flex-direction: column; margin: 0; overflow: hidden; }
+
+    #hud {
+      display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; align-items: center;
+      padding: 0.5rem 0.75rem; background: var(--panel); border-bottom: 1px solid var(--border);
+      font-size: 0.9rem; font-variant-numeric: tabular-nums;
+    }
+    #hud b { color: #fff; }
+    #hud .grow { flex: 1; }
+    #lives { color: var(--red); letter-spacing: 0.1em; }
+    #combo { color: var(--green); font-weight: 700; }
+    #powers { color: var(--blue); }
+    .icon-btn {
+      padding: 0.15rem 0.5rem; color: #c9d1d9; font: inherit; background: transparent;
+      border: 1px solid var(--border); border-radius: 0.4rem; cursor: pointer;
+    }
+    .icon-btn:hover { background: #21262d; }
+
+    #stage { position: relative; flex: 1; min-height: 0; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+
+    .overlay {
+      position: absolute; inset: 0; z-index: 1; display: grid; place-items: center; padding: 1.25rem;
+      background: rgba(13, 17, 23, 0.82); backdrop-filter: blur(3px);
+    }
+    .overlay[hidden] { display: none; }
+    .card {
+      width: min(100%, 30rem); padding: 1.75rem; text-align: center;
+      background: var(--panel); border: 1px solid var(--border); border-radius: 1rem;
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+    }
+    .eyebrow { margin: 0; color: var(--green); font-size: 0.8rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+    h1, h2 { margin: 0.4rem 0 0.6rem; line-height: 1.1; }
+    h1 { font-size: clamp(1.6rem, 6vw, 2.3rem); }
+    h2 { font-size: clamp(1.4rem, 5vw, 2rem); }
+    .card p { color: #c9d1d9; margin: 0.5rem 0; }
+    .legend { display: grid; gap: 0.35rem; margin: 1rem 0; padding: 0; text-align: left; list-style: none; font-size: 0.92rem; }
+    .legend li { display: flex; gap: 0.6rem; align-items: center; }
+    .sw { flex: none; width: 1rem; height: 1rem; border-radius: 3px; }
+    .keys { color: #8b949e; font-size: 0.85rem; }
+    .big { font-size: 3rem; font-weight: 800; color: #fff; line-height: 1; margin: 0.5rem 0; font-variant-numeric: tabular-nums; }
+    .stats { color: #8b949e; font-size: 0.9rem; }
+    .new-best { color: var(--green); font-weight: 700; }
+
+    button.primary {
+      margin-top: 0.75rem; padding: 0.7rem 1.4rem; color: #fff; font: inherit; font-weight: 700;
+      background: #238636; border: 0; border-radius: 0.5rem; cursor: pointer;
+    }
+    button.primary:hover { background: #2ea043; }
+    button:focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
+
+    /* Copilot, the sidekick */
+    #copilot {
+      position: absolute; left: 0.75rem; bottom: 0.75rem; z-index: 2; display: flex; align-items: flex-end; gap: 0.5rem;
+      max-width: min(22rem, calc(100% - 1.5rem)); pointer-events: none;
+    }
+    #copilot svg { flex: none; width: 3.25rem; height: 3.25rem; filter: drop-shadow(0 4px 10px rgba(0,0,0,.5)); }
+    #copilot.cheer svg { animation: bounce 0.6s ease 2; }
+    #bubble {
+      position: relative; padding: 0.55rem 0.8rem; color: #0d1117; font-size: 0.9rem; font-weight: 600;
+      background: #e6edf3; border-radius: 0.8rem 0.8rem 0.8rem 0.2rem;
+      opacity: 0; transform: translateY(6px) scale(0.96); transition: opacity .25s, transform .25s;
+    }
+    #bubble.show { opacity: 1; transform: none; }
+    #bubble small { display: block; color: #57606a; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
+    @keyframes bounce { 50% { transform: translateY(-8px) rotate(-6deg); } }
+
+    #toast {
+      position: absolute; top: 18%; left: 50%; transform: translateX(-50%);
+      font-size: clamp(1.3rem, 5vw, 2rem); font-weight: 800; color: #fff;
+      text-shadow: 0 2px 12px rgba(63, 185, 80, .8); opacity: 0; transition: opacity .3s; pointer-events: none;
+      white-space: nowrap;
+    }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="hud" aria-label="Game status">
+    <span>Score <b id="score">0</b></span>
+    <span>Best <b id="best">0</b></span>
+    <span>Level <b id="level">1</b></span>
+    <span id="lives" aria-label="Lives">♥♥♥</span>
+    <span id="combo"></span>
+    <span id="powers"></span>
+    <span class="grow"></span>
+    <button id="mute" class="icon-btn" type="button" aria-pressed="false" title="Sound (M)">🔊</button>
+    <button id="pause" class="icon-btn" type="button" title="Pause (P)">⏸</button>
+  </div>
+
+  <div id="stage">
+    <canvas id="game" aria-label="Mona's Octoverse Arcade playfield"></canvas>
+
+    <div id="toast" aria-hidden="true"></div>
+
+    <div id="copilot" aria-live="polite">
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <ellipse cx="32" cy="36" rx="27" ry="23" fill="#8957e5"/>
+        <ellipse cx="32" cy="38" rx="21" ry="15" fill="#1f1235"/>
+        <rect x="11" y="26" width="18" height="13" rx="6" fill="#d2a8ff"/>
+        <rect x="35" y="26" width="18" height="13" rx="6" fill="#d2a8ff"/>
+        <circle cx="20" cy="33" r="3" fill="#1f1235"/>
+        <circle cx="44" cy="33" r="3" fill="#1f1235"/>
+        <path d="M24 46 q8 6 16 0" stroke="#d2a8ff" stroke-width="3" fill="none" stroke-linecap="round"/>
+        <rect x="29" y="6" width="6" height="9" rx="3" fill="#8957e5"/>
+        <circle cx="32" cy="6" r="4" fill="#3fb950"/>
+      </svg>
+      <div id="bubble" role="status"><small>Copilot</small><span id="tip">Ready when you are!</span></div>
+    </div>
+
+    <div id="start" class="overlay">
+      <main class="card">
+        <p class="eyebrow">Canvas extension</p>
+        <h1>Mona's Octoverse Arcade</h1>
+        <p>Help Mona the Octocat ship commits and squash the backlog. Copilot is riding along with tips.</p>
+        <ul class="legend">
+          <li><span class="sw" style="background:#3fb950"></span>Commit squares: catch them for points. Chain them for a merge combo.</li>
+          <li><span class="sw" style="background:#f85149"></span>Bugs: dodge them, each hit costs a life.</li>
+          <li><span class="sw" style="background:#58a6ff"></span>Branch protection: a shield that blocks one bug.</li>
+          <li><span class="sw" style="background:#bc8cff"></span>Pull request magnet: commits come to you.</li>
+        </ul>
+        <p class="keys">Move with arrows / WASD, or drag on the playfield. P pauses, M mutes.</p>
+        <button id="play" class="primary" type="button">Start game</button>
+      </main>
+    </div>
+
+    <div id="paused" class="overlay" hidden>
+      <div class="card">
+        <h2>Paused</h2>
+        <p>Take a break. The bugs will wait.</p>
+        <button id="resume" class="primary" type="button">Resume</button>
+      </div>
+    </div>
+
+    <div id="over" class="overlay" hidden>
+      <div class="card" role="dialog" aria-labelledby="over-title">
+        <p class="eyebrow" style="color:var(--red)">Build failed</p>
+        <h2 id="over-title">Game over</h2>
+        <div class="big" id="final">0</div>
+        <p class="stats" id="summary"></p>
+        <p id="best-note"></p>
+        <button id="restart" class="primary" type="button">Restart</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  "use strict";
+  (() => {
+    const $ = (s) => document.querySelector(s);
+    const canvas = $("#game");
+    const ctx = canvas.getContext("2d");
+    const ui = {
+      score: $("#score"), best: $("#best"), level: $("#level"), lives: $("#lives"),
+      combo: $("#combo"), powers: $("#powers"), tip: $("#tip"), bubble: $("#bubble"),
+      copilot: $("#copilot"), toast: $("#toast"), start: $("#start"), paused: $("#paused"),
+      over: $("#over"), final: $("#final"), summary: $("#summary"), bestNote: $("#best-note"),
+      mute: $("#mute"),
+    };
+
+    const MAX_LIVES = 3;
+    const LEVEL_SECONDS = 20;
+    const POWER_SECONDS = 8;
+    const COMMIT_SHADES = ["#0e4429", "#006d32", "#26a641", "#39d353"];
+    const TIPS = [
+      "Nice! Small commits, big wins.",
+      "You're shipping faster than CI can blink!",
+      "Pro tip: dodge first, collect second.",
+      "Ten more commits to green the whole graph!",
+      "That streak deserves a release note.",
+      "Bugs hate this one trick: moving.",
+      "LGTM! Keep that momentum going.",
+      "Merge combos multiply points. Keep the chain alive!",
+      "You and me, pair programming at max speed.",
+      "Your contribution graph is glowing!",
+      "Shields up! Branch protection saves lives.",
+      "Legendary. Even the linter is impressed.",
+    ];
+
+    // ---- persistent best score (the canvas origin may change between sessions, so this is best effort)
+    const store = {
+      get() { try { return Number(localStorage.getItem("mona-arcade-best")) || 0; } catch { return 0; } },
+      set(v) { try { localStorage.setItem("mona-arcade-best", String(v)); } catch { /* ignore */ } },
+    };
+
+    // ---- sound, generated with WebAudio (no external assets)
+    const sound = {
+      ctx: null, muted: false,
+      ensure() {
+        if (!this.ctx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (AC) this.ctx = new AC();
+        }
+        if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+      },
+      tone(freq, dur = 0.08, type = "square", vol = 0.05, slide = 0) {
+        if (this.muted || !this.ctx) return;
+        const t = this.ctx.currentTime;
+        const o = this.ctx.createOscillator();
+        const g = this.ctx.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(freq, t);
+        if (slide) o.frequency.exponentialRampToValueAtTime(Math.max(40, freq + slide), t + dur);
+        g.gain.setValueAtTime(vol, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        o.connect(g).connect(this.ctx.destination);
+        o.start(t);
+        o.stop(t + dur + 0.02);
+      },
+      collect(combo) { this.tone(520 + Math.min(combo, 20) * 30, 0.07, "square", 0.04); },
+      hit() { this.tone(220, 0.3, "sawtooth", 0.07, -160); },
+      power() { [440, 660, 880].forEach((f, i) => setTimeout(() => this.tone(f, 0.09, "triangle", 0.06), i * 70)); },
+      tip() { [660, 990].forEach((f, i) => setTimeout(() => this.tone(f, 0.1, "sine", 0.06), i * 90)); },
+      level() { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this.tone(f, 0.1, "triangle", 0.05), i * 80)); },
+      over() { [392, 330, 262, 196].forEach((f, i) => setTimeout(() => this.tone(f, 0.18, "sawtooth", 0.05), i * 150)); },
+    };
+
+    // ---- layout
+    let W = 0, H = 0, DPR = 1;
+    function resize() {
+      const r = canvas.getBoundingClientRect();
+      DPR = Math.min(window.devicePixelRatio || 1, 2);
+      W = Math.max(240, r.width);
+      H = Math.max(240, r.height);
+      canvas.width = Math.round(W * DPR);
+      canvas.height = Math.round(H * DPR);
+      ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+      if (game.mona) {
+        game.mona.x = clamp(game.mona.x, game.mona.r, W - game.mona.r);
+        game.mona.y = clamp(game.mona.y, game.mona.r, H - game.mona.r);
+      }
+      buildBackdrop();
+    }
+
+    // ---- state
+    const game = {
+      state: "menu", // menu | playing | paused | over
+      score: 0, best: store.get(), lives: MAX_LIVES, time: 0, level: 1,
+      combo: 0, bestCombo: 0, caught: 0, tipsShown: 0,
+      mona: null, items: [], particles: [], floaters: [],
+      spawn: { commit: 0, bug: 0, power: 0 },
+      shield: 0, magnet: 0, invuln: 0, shake: 0,
+    };
+    const keys = new Set();
+    const pointer = { active: false, x: 0, y: 0 };
+
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const rand = (a, b) => a + Math.random() * (b - a);
+    const speedMul = () => Math.min(1 + game.time / 35, 3.4);
+    const multiplier = () => Math.min(1 + Math.floor(game.combo / 5), 5);
+
+    function reset() {
+      game.score = 0; game.lives = MAX_LIVES; game.time = 0; game.level = 1;
+      game.combo = 0; game.bestCombo = 0; game.caught = 0; game.tipsShown = 0;
+      game.items = []; game.particles = []; game.floaters = [];
+      game.spawn = { commit: 0.3, bug: 1.2, power: rand(10, 16) };
+      game.shield = 0; game.magnet = 0; game.invuln = 0; game.shake = 0;
+      game.mona = { x: W / 2, y: H - 70, r: 22, vx: 0, vy: 0, blink: 2, face: 1 };
+      say("Let's ship it! Catch the green commits, dodge the red bugs.");
+      updateHud();
+    }
+
+    function start() {
+      sound.ensure();
+      reset();
+      setState("playing");
+    }
+
+    function setState(s) {
+      game.state = s;
+      ui.start.hidden = s !== "menu";
+      ui.paused.hidden = s !== "paused";
+      ui.over.hidden = s !== "over";
+      document.body.dataset.state = s;
+      const focusTarget = { menu: "#play", paused: "#resume", over: "#restart" }[s];
+      if (focusTarget) $(focusTarget).focus();
+      else canvas.focus?.();
+    }
+
+    function togglePause() {
+      if (game.state === "playing") setState("paused");
+      else if (game.state === "paused") { setState("playing"); last = performance.now(); }
+    }
+
+    // ---- spawning
+    function spawnItem(type) {
+      const m = speedMul();
+      const base = { x: 0, y: -30, t: 0, type };
+      if (type === "commit") {
+        Object.assign(base, { s: 22, vy: rand(90, 140) * m, shade: COMMIT_SHADES[(Math.random() * 4) | 0] });
+      } else if (type === "bug") {
+        Object.assign(base, { s: 26, vy: rand(110, 170) * m, wob: rand(0.6, 1.6), amp: rand(20, 60) * (Math.random() < .5 ? -1 : 1) });
+      } else {
+        Object.assign(base, { s: 26, vy: rand(80, 110) * Math.sqrt(m) });
+      }
+      base.x = rand(base.s, W - base.s);
+      base.x0 = base.x;
+      game.items.push(base);
+    }
+
+    // ---- loop
+    let last = performance.now();
+    function frame(now) {
+      const dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      if (game.state === "playing") update(dt);
+      else updateCosmetics(dt);
+      draw(now / 1000);
+      requestAnimationFrame(frame);
+    }
+
+    function update(dt) {
+      game.time += dt;
+      const newLevel = 1 + Math.floor(game.time / LEVEL_SECONDS);
+      if (newLevel > game.level) {
+        game.level = newLevel;
+        toast(`Level ${game.level}: speed up!`);
+        sound.level();
+      }
+
+      // spawn timers shrink as the game speeds up
+      const m = speedMul();
+      game.spawn.commit -= dt;
+      game.spawn.bug -= dt;
+      game.spawn.power -= dt;
+      if (game.spawn.commit <= 0) { spawnItem("commit"); game.spawn.commit = rand(0.55, 0.95) / Math.sqrt(m); }
+      if (game.spawn.bug <= 0) { spawnItem("bug"); game.spawn.bug = rand(0.9, 1.5) / m; }
+      if (game.spawn.power <= 0) { spawnItem(Math.random() < 0.5 ? "shield" : "magnet"); game.spawn.power = rand(14, 22); }
+
+      // Mona
+      const mona = game.mona;
+      const sp = 380;
+      let ax = (keys.has("right") ? 1 : 0) - (keys.has("left") ? 1 : 0);
+      let ay = (keys.has("down") ? 1 : 0) - (keys.has("up") ? 1 : 0);
+      if (ax || ay) {
+        const n = Math.hypot(ax, ay);
+        mona.vx = (ax / n) * sp; mona.vy = (ay / n) * sp;
+      } else if (pointer.active) {
+        const dx = pointer.x - mona.x, dy = pointer.y - 30 - mona.y;
+        const d = Math.hypot(dx, dy);
+        const v = Math.min(d * 9, sp * 1.4);
+        mona.vx = d > 1 ? (dx / d) * v : 0; mona.vy = d > 1 ? (dy / d) * v : 0;
+      } else {
+        mona.vx *= 0.8; mona.vy *= 0.8;
+      }
+      mona.x = clamp(mona.x + mona.vx * dt, mona.r, W - mona.r);
+      mona.y = clamp(mona.y + mona.vy * dt, mona.r + 10, H - mona.r);
+      if (Math.abs(mona.vx) > 20) mona.face = Math.sign(mona.vx);
+      mona.blink -= dt;
+      if (mona.blink < -0.12) mona.blink = rand(2, 4.5);
+
+      game.invuln = Math.max(0, game.invuln - dt);
+      game.shield = Math.max(0, game.shield - dt);
+      game.magnet = Math.max(0, game.magnet - dt);
+
+      // items
+      for (const it of game.items) {
+        it.t += dt;
+        it.y += it.vy * dt;
+        if (it.type === "bug") it.x = clamp(it.x0 + Math.sin(it.t * it.wob * 3) * it.amp, it.s, W - it.s);
+        if (it.type === "commit" && game.magnet > 0) {
+          const dx = mona.x - it.x, dy = mona.y - it.y, d = Math.hypot(dx, dy);
+          if (d < 190) { it.x += (dx / d) * 320 * dt; it.y += (dy / d) * 320 * dt; }
+        }
+        const hitR = it.type === "commit" ? it.s * 0.7 + mona.r * 0.9 : it.s * 0.45 + mona.r * 0.75;
+        if (Math.hypot(it.x - mona.x, it.y - mona.y) < hitR) {
+          it.dead = true;
+          onTouch(it);
+        } else if (it.y > H + 40) {
+          it.dead = true;
+          if (it.type === "commit" && game.combo > 0) { game.combo = 0; updateHud(); }
+        }
+      }
+      game.items = game.items.filter((i) => !i.dead);
+      updateCosmetics(dt);
+      if (game.lives <= 0) gameOver();
+    }
+
+    function updateCosmetics(dt) {
+      for (const p of game.particles) { p.t += dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt; }
+      game.particles = game.particles.filter((p) => p.t < p.life);
+      for (const f of game.floaters) { f.t += dt; f.y -= 40 * dt; }
+      game.floaters = game.floaters.filter((f) => f.t < 0.9);
+      game.shake = Math.max(0, game.shake - dt * 30);
+    }
+
+    function onTouch(it) {
+      const mona = game.mona;
+      if (it.type === "commit") {
+        const before = game.score;
+        const pts = multiplier();
+        game.combo += 1;
+        game.bestCombo = Math.max(game.bestCombo, game.combo);
+        game.caught += 1;
+        game.score += pts;
+        burst(it.x, it.y, it.shade === COMMIT_SHADES[0] ? "#26a641" : it.shade, 10);
+        floater(it.x, it.y, `+${pts}`, "#3fb950");
+        sound.collect(game.combo);
+        if (game.combo > 0 && game.combo % 5 === 0 && multiplier() > 1) toast(`Merge combo x${multiplier()}!`);
+        if (Math.floor(game.score / 10) > Math.floor(before / 10)) copilotTip();
+      } else if (it.type === "bug") {
+        if (game.invuln > 0) return;
+        if (game.shield > 0) {
+          game.shield = 0;
+          burst(it.x, it.y, "#58a6ff", 16);
+          floater(it.x, it.y, "Blocked!", "#58a6ff");
+          sound.power();
+          game.invuln = 0.6;
+        } else {
+          game.lives -= 1;
+          game.combo = 0;
+          game.invuln = 1.4;
+          game.shake = 10;
+          burst(mona.x, mona.y, "#f85149", 18);
+          floater(mona.x, mona.y - 30, "Bug!", "#f85149");
+          sound.hit();
+          if (game.lives > 0) say(game.lives === 1 ? "Last life! I believe in you, Mona." : "Ouch, a bug! Shake it off, we've got this.");
+        }
+      } else {
+        game[it.type] = POWER_SECONDS;
+        burst(it.x, it.y, it.type === "shield" ? "#58a6ff" : "#bc8cff", 16);
+        floater(it.x, it.y, it.type === "shield" ? "Branch protection!" : "PR magnet!", it.type === "shield" ? "#58a6ff" : "#bc8cff");
+        sound.power();
+      }
+      updateHud();
+    }
+
+    function gameOver() {
+      const isBest = game.score > game.best;
+      if (isBest) { game.best = game.score; store.set(game.best); }
+      ui.final.textContent = game.score;
+      const mins = Math.floor(game.time / 60), secs = Math.floor(game.time % 60);
+      ui.summary.textContent = `${game.caught} commits shipped · best combo ${game.bestCombo} · level ${game.level} · ${mins}:${String(secs).padStart(2, "0")}`;
+      ui.bestNote.textContent = isBest && game.score > 0 ? "New high score!" : `Best: ${game.best}`;
+      ui.bestNote.className = isBest && game.score > 0 ? "new-best" : "stats";
+      say(isBest && game.score > 0 ? "New record! That's a release worth celebrating." : "Every bug is a lesson. Ready for another run?");
+      sound.over();
+      updateHud();
+      setState("over");
+    }
+
+    // ---- Copilot & toasts
+    let bubbleTimer = 0, toastTimer = 0;
+    function say(text) {
+      ui.tip.textContent = text;
+      ui.bubble.classList.add("show");
+      clearTimeout(bubbleTimer);
+      bubbleTimer = setTimeout(() => ui.bubble.classList.remove("show"), 4200);
+    }
+    function copilotTip() {
+      const tip = TIPS[game.tipsShown % TIPS.length];
+      game.tipsShown += 1;
+      say(`${Math.floor(game.score / 10) * 10} points! ${tip}`);
+      ui.copilot.classList.remove("cheer");
+      void ui.copilot.offsetWidth;
+      ui.copilot.classList.add("cheer");
+      sound.tip();
+    }
+    function toast(text) {
+      ui.toast.textContent = text;
+      ui.toast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => ui.toast.classList.remove("show"), 1300);
+    }
+
+    function updateHud() {
+      ui.score.textContent = game.score;
+      ui.best.textContent = Math.max(game.best, game.score);
+      ui.level.textContent = game.level;
+      ui.lives.textContent = "♥".repeat(Math.max(0, game.lives)) + "♡".repeat(MAX_LIVES - Math.max(0, game.lives));
+      ui.lives.setAttribute("aria-label", `${game.lives} lives`);
+      ui.combo.textContent = multiplier() > 1 ? `Combo x${multiplier()}` : "";
+      const p = [];
+      if (game.shield > 0) p.push(`🛡 ${Math.ceil(game.shield)}s`);
+      if (game.magnet > 0) p.push(`🧲 ${Math.ceil(game.magnet)}s`);
+      ui.powers.textContent = p.join("  ");
+    }
+    setInterval(() => { if (game.state === "playing") updateHud(); }, 250);
+
+    // ---- effects
+    function burst(x, y, color, n) {
+      for (let i = 0; i < n; i++) {
+        const a = rand(0, Math.PI * 2), v = rand(60, 220);
+        game.particles.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - 80, t: 0, life: rand(0.4, 0.8), color, s: rand(2, 5) });
+      }
+    }
+    function floater(x, y, text, color) { game.floaters.push({ x, y, text, color, t: 0 }); }
+
+    // ---- drawing
+    let backdrop = null;
+    function buildBackdrop() {
+      backdrop = document.createElement("canvas");
+      backdrop.width = canvas.width; backdrop.height = canvas.height;
+      const b = backdrop.getContext("2d");
+      b.setTransform(DPR, 0, 0, DPR, 0, 0);
+      const g = b.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, "#0d1117"); g.addColorStop(1, "#111a2b");
+      b.fillStyle = g; b.fillRect(0, 0, W, H);
+      // a faint contribution-graph grid
+      const cell = 16;
+      for (let y = 6; y < H; y += cell) {
+        for (let x = 6; x < W; x += cell) {
+          const r = Math.random();
+          b.fillStyle = r > 0.97 ? "rgba(57,211,83,.10)" : r > 0.9 ? "rgba(38,166,65,.06)" : "rgba(110,118,129,.05)";
+          b.fillRect(x, y, cell - 4, cell - 4);
+        }
+      }
+    }
+
+    const stars = Array.from({ length: 60 }, () => ({ x: Math.random(), y: Math.random(), z: rand(0.2, 1) }));
+
+    function draw(t) {
+      ctx.save();
+      if (game.shake > 0) ctx.translate(rand(-1, 1) * game.shake, rand(-1, 1) * game.shake);
+      if (backdrop) ctx.drawImage(backdrop, 0, 0, W, H);
+      else { ctx.fillStyle = "#0d1117"; ctx.fillRect(0, 0, W, H); }
+
+      // drifting stars, faster with speed
+      const m = game.state === "playing" ? speedMul() : 1;
+      for (const s of stars) {
+        const y = ((s.y * H + t * 30 * s.z * m) % H);
+        ctx.fillStyle = `rgba(201,209,217,${0.25 * s.z})`;
+        ctx.fillRect(s.x * W, y, 2 * s.z, 2 * s.z + m * s.z);
+      }
+
+      for (const it of game.items) {
+        if (it.type === "commit") drawCommit(it, t);
+        else if (it.type === "bug") drawBug(it, t);
+        else drawPower(it, t);
+      }
+
+      if (game.mona) drawMona(game.mona, t);
+
+      for (const p of game.particles) {
+        ctx.globalAlpha = 1 - p.t / p.life;
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - p.s / 2, p.y - p.s / 2, p.s, p.s);
+      }
+      ctx.globalAlpha = 1;
+      ctx.textAlign = "center";
+      ctx.font = "700 15px system-ui, sans-serif";
+      for (const f of game.floaters) {
+        ctx.globalAlpha = 1 - f.t / 0.9;
+        ctx.fillStyle = f.color;
+        ctx.fillText(f.text, f.x, f.y);
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    function roundRect(x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
+    }
+
+    function drawCommit(it, t) {
+      const s = it.s, pulse = 1 + Math.sin(t * 6 + it.x) * 0.05;
+      ctx.save();
+      ctx.translate(it.x, it.y);
+      ctx.scale(pulse, pulse);
+      ctx.shadowColor = "#39d353"; ctx.shadowBlur = game.magnet > 0 ? 16 : 8;
+      ctx.fillStyle = it.shade === COMMIT_SHADES[0] ? "#26a641" : it.shade;
+      roundRect(-s / 2, -s / 2, s, s, 4); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(255,255,255,.25)"; ctx.lineWidth = 1.5;
+      roundRect(-s / 2 + 1, -s / 2 + 1, s - 2, s - 2, 3); ctx.stroke();
+      ctx.restore();
+    }
+
+    function drawBug(it, t) {
+      const s = it.s;
+      ctx.save();
+      ctx.translate(it.x, it.y);
+      ctx.rotate(Math.sin(it.t * it.wob * 3) * 0.25);
+      ctx.strokeStyle = "#f85149"; ctx.lineWidth = 2; ctx.lineCap = "round";
+      const wig = Math.sin(t * 20 + it.x) * 3;
+      for (const side of [-1, 1]) {
+        for (let i = -1; i <= 1; i++) {
+          ctx.beginPath();
+          ctx.moveTo(side * s * 0.25, i * s * 0.18);
+          ctx.lineTo(side * s * 0.62, i * s * 0.28 + (i === 0 ? wig * side : wig * 0.5));
+          ctx.stroke();
+        }
+        ctx.beginPath();
+        ctx.moveTo(side * s * 0.12, s * 0.38);
+        ctx.quadraticCurveTo(side * s * 0.3, s * 0.65, side * s * 0.38, s * 0.62);
+        ctx.stroke();
+      }
+      ctx.shadowColor = "#f85149"; ctx.shadowBlur = 10;
+      ctx.fillStyle = "#da3633";
+      ctx.beginPath(); ctx.ellipse(0, 0, s * 0.32, s * 0.4, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = "#8e1519";
+      ctx.beginPath(); ctx.arc(0, s * 0.32, s * 0.2, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#8e1519"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(0, -s * 0.38); ctx.lineTo(0, s * 0.2); ctx.stroke();
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(-s * 0.08, s * 0.38, 2, 0, Math.PI * 2); ctx.arc(s * 0.08, s * 0.38, 2, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
+    function drawPower(it, t) {
+      const isShield = it.type === "shield";
+      const color = isShield ? "#58a6ff" : "#bc8cff";
+      ctx.save();
+      ctx.translate(it.x, it.y + Math.sin(t * 4) * 3);
+      ctx.shadowColor = color; ctx.shadowBlur = 18;
+      ctx.strokeStyle = color; ctx.lineWidth = 2.5;
+      ctx.beginPath(); ctx.arc(0, 0, it.s * 0.62, 0, Math.PI * 2); ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = color;
+      if (isShield) {
+        ctx.beginPath();
+        ctx.moveTo(0, -10); ctx.lineTo(9, -6); ctx.lineTo(8, 3); ctx.quadraticCurveTo(5, 9, 0, 11);
+        ctx.quadraticCurveTo(-5, 9, -8, 3); ctx.lineTo(-9, -6); ctx.closePath(); ctx.fill();
+      } else {
+        // a pull-request glyph: two nodes joined by a branch
+        ctx.lineWidth = 2.5; ctx.strokeStyle = color;
+        ctx.beginPath(); ctx.arc(-5, -7, 3, 0, Math.PI * 2); ctx.arc(-5, 8, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(6, 8, 3, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(-5, -4); ctx.lineTo(-5, 5); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(6, 5); ctx.lineTo(6, -3); ctx.quadraticCurveTo(6, -7, 1, -7); ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    function drawMona(m, t) {
+      const r = m.r;
+      ctx.save();
+      ctx.translate(m.x, m.y);
+      if (game.invuln > 0 && Math.floor(t * 12) % 2 === 0) ctx.globalAlpha = 0.35;
+      const tilt = clamp(m.vx / 1200, -0.25, 0.25);
+      ctx.rotate(tilt);
+
+      // tentacles under the head
+      ctx.strokeStyle = "#e6edf3"; ctx.lineWidth = 4; ctx.lineCap = "round";
+      for (let i = 0; i < 5; i++) {
+        const bx = (i - 2) * r * 0.32;
+        const sway = Math.sin(t * 8 + i * 1.3) * 4;
+        ctx.beginPath();
+        ctx.moveTo(bx, r * 0.55);
+        ctx.quadraticCurveTo(bx + sway, r * 0.95, bx + sway * 1.6 + (i - 2) * 3, r * 1.25);
+        ctx.stroke();
+      }
+
+      // head with ears
+      ctx.fillStyle = "#e6edf3";
+      ctx.beginPath();
+      ctx.moveTo(-r * 0.92, -r * 0.1);
+      ctx.lineTo(-r * 0.85, -r * 1.05);
+      ctx.lineTo(-r * 0.4, -r * 0.7);
+      ctx.quadraticCurveTo(0, -r * 0.85, r * 0.4, -r * 0.7);
+      ctx.lineTo(r * 0.85, -r * 1.05);
+      ctx.lineTo(r * 0.92, -r * 0.1);
+      ctx.quadraticCurveTo(r * 1.0, r * 0.75, 0, r * 0.75);
+      ctx.quadraticCurveTo(-r * 1.0, r * 0.75, -r * 0.92, -r * 0.1);
+      ctx.fill();
+
+      // face patch
+      ctx.fillStyle = "#f6c8a8";
+      ctx.beginPath(); ctx.ellipse(0, r * 0.12, r * 0.66, r * 0.48, 0, 0, Math.PI * 2); ctx.fill();
+
+      // eyes look where Mona is heading
+      const look = m.face * 2;
+      const blinking = m.blink < 0;
+      ctx.fillStyle = "#1f2328";
+      for (const ex of [-r * 0.3, r * 0.3]) {
+        ctx.beginPath();
+        if (blinking) ctx.ellipse(ex + look, r * 0.05, r * 0.13, 1.5, 0, 0, Math.PI * 2);
+        else ctx.ellipse(ex + look, r * 0.05, r * 0.11, r * 0.17, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (!blinking) {
+        ctx.fillStyle = "#fff";
+        for (const ex of [-r * 0.3, r * 0.3]) { ctx.beginPath(); ctx.arc(ex + look + 2, -r * 0.03, 2, 0, Math.PI * 2); ctx.fill(); }
+      }
+      // nose and smile
+      ctx.fillStyle = "#cf6f7a";
+      ctx.beginPath(); ctx.arc(look * 0.5, r * 0.28, 2.5, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "#1f2328"; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(look * 0.5, r * 0.32, 5, 0.2 * Math.PI, 0.8 * Math.PI); ctx.stroke();
+
+      ctx.globalAlpha = 1;
+      // shield bubble and magnet aura
+      if (game.shield > 0) {
+        ctx.strokeStyle = `rgba(88,166,255,${0.6 + Math.sin(t * 8) * 0.25})`; ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.arc(0, r * 0.1, r * 1.55, 0, Math.PI * 2); ctx.stroke();
+      }
+      if (game.magnet > 0) {
+        ctx.strokeStyle = "rgba(188,140,255,.35)"; ctx.lineWidth = 2; ctx.setLineDash([6, 8]);
+        ctx.lineDashOffset = -t * 40;
+        ctx.beginPath(); ctx.arc(0, 0, 190 * (0.9 + Math.sin(t * 3) * 0.05), 0, Math.PI * 2); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+      ctx.restore();
+    }
+
+    // ---- input
+    const KEYMAP = { ArrowLeft: "left", a: "left", A: "left", ArrowRight: "right", d: "right", D: "right",
+      ArrowUp: "up", w: "up", W: "up", ArrowDown: "down", s: "down", S: "down" };
+    window.addEventListener("keydown", (e) => {
+      if (KEYMAP[e.key]) { keys.add(KEYMAP[e.key]); if (game.state === "playing") e.preventDefault(); }
+      else if (e.key === "p" || e.key === "P" || e.key === "Escape") togglePause();
+      else if (e.key === "m" || e.key === "M") toggleMute();
+      else if ((e.key === "Enter" || e.key === " ") && (game.state === "menu" || game.state === "over") && document.activeElement?.tagName !== "BUTTON") { e.preventDefault(); start(); }
+    });
+    window.addEventListener("keyup", (e) => { if (KEYMAP[e.key]) keys.delete(KEYMAP[e.key]); });
+    window.addEventListener("blur", () => { keys.clear(); pointer.active = false; if (game.state === "playing") setState("paused"); });
+    document.addEventListener("visibilitychange", () => { if (document.hidden && game.state === "playing") setState("paused"); });
+
+    function setPointer(e) {
+      const r = canvas.getBoundingClientRect();
+      pointer.x = e.clientX - r.left; pointer.y = e.clientY - r.top;
+    }
+    canvas.addEventListener("pointerdown", (e) => { pointer.active = true; setPointer(e); canvas.setPointerCapture(e.pointerId); });
+    canvas.addEventListener("pointermove", (e) => { if (pointer.active) setPointer(e); });
+    const release = () => { pointer.active = false; };
+    canvas.addEventListener("pointerup", release);
+    canvas.addEventListener("pointercancel", release);
+
+    function toggleMute() {
+      sound.muted = !sound.muted;
+      ui.mute.textContent = sound.muted ? "🔇" : "🔊";
+      ui.mute.setAttribute("aria-pressed", String(sound.muted));
+    }
+    ui.mute.addEventListener("click", toggleMute);
+    $("#pause").addEventListener("click", togglePause);
+    $("#play").addEventListener("click", start);
+    $("#restart").addEventListener("click", start);
+    $("#resume").addEventListener("click", togglePause);
+
+    // read-only peek at the state, for debugging and automated checks
+    Object.defineProperty(window, "monaArcade", { value: { get state() { return game; } } });
+
+    new ResizeObserver(resize).observe(canvas);
+    resize();
+    updateHud();
+    setState("menu");
+    say("Hi! I'm Copilot. Press Start and I'll cheer you on every 10 points.");
+    requestAnimationFrame((n) => { last = n; frame(n); });
+  })();
+  </script>
+</body>
+</html>
