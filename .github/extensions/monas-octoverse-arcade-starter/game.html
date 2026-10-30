@@ -186,6 +186,7 @@
     // The tunnel: the camera sits CAM units behind Mona's plane (z = 0); things are born at FAR.
     const CAM = 4, FAR = 18, FLOOR = 1.4, ROW = 1.5, COLS = 4, COL_W = 0.8;
     const COMMIT_SHADES = ["#0e4429", "#006d32", "#26a641", "#39d353"];
+    const MARKER = { commit: "rgba(63,185,80,.35)", bug: "rgba(248,81,73,.5)", shield: "rgba(88,166,255,.5)", magnet: "rgba(188,140,255,.5)" };
     const TIPS = [
       "Nice! Small commits, big wins.",
       "You're shipping faster than CI can blink!",
@@ -291,14 +292,14 @@
 
     const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
     const rand = (a, b) => a + Math.random() * (b - a);
-    const speedMul = () => Math.min(1 + game.time / 35, 3.4);
+    const speedMul = () => Math.min(1 + game.time / 45, 3);
     const multiplier = () => Math.min(1 + Math.floor(game.combo / 5), 5);
 
     function reset() {
       game.score = 0; game.lives = MAX_LIVES; game.time = 0; game.level = 1; game.dist = 0;
       game.combo = 0; game.bestCombo = 0; game.caught = 0; game.tipsShown = 0;
       game.items = []; game.particles = []; game.floaters = [];
-      game.spawn = { commit: 0.3, bug: 1.4, power: rand(10, 16) };
+      game.spawn = { commit: 0.3, bug: 2.5, power: rand(5, 8) };
       game.shield = 0; game.magnet = 0; game.invuln = 0; game.shake = 0;
       game.mona = { x: 0, y: 0.45, r: 26, vx: 0, vy: 0, blink: 2, face: 1 };
       say("Let's ship it! Fly through the green commits, dodge the red bugs.");
@@ -336,15 +337,15 @@
         Object.assign(it, { s: 30, vz: rand(5, 7) * m, shade: COMMIT_SHADES[(Math.random() * 4) | 0] });
       } else if (type === "bug") {
         // most bugs aim where Mona is now; a few drift in and weave
-        const aimed = Math.random() < 0.65;
+        const aimed = Math.random() < 0.5;
         Object.assign(it, {
           s: 34, vz: rand(6, 8.5) * m,
           x: aimed ? game.mona.x + rand(-0.25, 0.25) : it.x,
           y: aimed ? game.mona.y + rand(-0.25, 0.25) : it.y,
-          wob: rand(0.6, 1.6), amp: rand(0.12, 0.35) * (Math.random() < .5 ? -1 : 1), home: aimed ? rand(0.3, 0.9) : 0,
+          wob: rand(0.6, 1.6), amp: rand(0.12, 0.35) * (Math.random() < .5 ? -1 : 1), home: aimed ? rand(0.2, 0.6) : 0,
         });
       } else {
-        Object.assign(it, { s: 32, vz: rand(4.5, 5.5) * Math.sqrt(m) });
+        Object.assign(it, { s: 36, vz: rand(4, 5) * Math.sqrt(m) });
       }
       it.x0 = it.x;
       game.items.push(it);
@@ -378,8 +379,14 @@
       game.spawn.bug -= dt;
       game.spawn.power -= dt;
       if (game.spawn.commit <= 0) { spawnItem("commit"); game.spawn.commit = rand(0.5, 0.9) / Math.sqrt(m); }
-      if (game.spawn.bug <= 0) { spawnItem("bug"); game.spawn.bug = rand(1.0, 1.6) / m; }
-      if (game.spawn.power <= 0) { spawnItem(Math.random() < 0.5 ? "shield" : "magnet"); game.spawn.power = rand(14, 22); }
+      if (game.spawn.bug <= 0) { spawnItem("bug"); game.spawn.bug = rand(1.2, 1.9) / Math.sqrt(m); }
+      if (game.spawn.power <= 0) {
+        const type = Math.random() < 0.5 ? "shield" : "magnet";
+        spawnItem(type);
+        game.spawn.power = rand(9, 14);
+        // Copilot calls it out, unless a fresh tip is still on screen
+        if (performance.now() - lastTipAt > 2500) say(type === "shield" ? "Branch protection ahead! Fly through the blue ring." : "PR magnet ahead! Grab the purple ring.");
+      }
 
       // Mona flies on her plane, in world units per second
       const mona = game.mona;
@@ -419,9 +426,15 @@
         if (it.type === "commit" && game.magnet > 0 && it.z < 7) {
           it.x += (mona.x - it.x) * 4 * dt; it.y += (mona.y - it.y) * 4 * dt;
         }
-        if (it.z < 0.6 && it.z > -0.6) {
+        if (it.type !== "commit" && it.type !== "bug" && it.z < 6) {
+          // power-ups are rewards: they lean toward Mona, so a nudge in their direction is enough
+          it.x += (mona.x - it.x) * 0.8 * dt; it.y += (mona.y - it.y) * 0.8 * dt;
+        }
+        if (it.z < 0.7 && it.z > -0.8) {
           const p = project(it.x, it.y, Math.max(it.z, 0));
-          const hitR = it.type === "commit" ? it.s * 0.6 + mona.r * 0.9 : it.s * 0.4 + mona.r * 0.7;
+          const hitR = it.type === "commit" ? it.s * 0.6 + mona.r * 0.9
+            : it.type === "bug" ? it.s * 0.35 + mona.r * 0.65
+            : it.s * 0.8 + mona.r * 1.1;   // power-ups are generous
           if (Math.hypot(p.x - mp.x, p.y - mp.y) < hitR) { it.dead = true; onTouch(it, p); }
         }
         if (it.z <= -1.2) {
@@ -499,7 +512,7 @@
     }
 
     // ---- Copilot & toasts
-    let bubbleTimer = 0, toastTimer = 0;
+    let bubbleTimer = 0, toastTimer = 0, lastTipAt = 0;
     function say(text) {
       ui.tip.textContent = text;
       ui.bubble.classList.add("show");
@@ -509,6 +522,7 @@
     function copilotTip() {
       const tip = TIPS[game.tipsShown % TIPS.length];
       game.tipsShown += 1;
+      lastTipAt = performance.now();
       say(`${Math.floor(game.score / 10) * 10} points! ${tip}`);
       ui.copilot.classList.remove("cheer");
       void ui.copilot.offsetWidth;
@@ -619,6 +633,15 @@
 
       // far things first; Mona sits at z = 0 and is drawn in her turn
       const items = game.items.slice().sort((a, b) => b.z - a.z);
+      // every item marks the floor in its colour: that is how you read where it is in the tunnel
+      for (const it of items) {
+        if (it.z < -0.5) continue;
+        const sh = project(it.x, FLOOR, it.z);
+        ctx.globalAlpha = clamp((FAR - it.z) / 4, 0, 1);
+        ctx.fillStyle = MARKER[it.type];
+        ctx.beginPath(); ctx.ellipse(sh.x, sh.y, it.s * 0.55 * sh.s, it.s * 0.16 * sh.s, 0, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalAlpha = 1;
       let monaDrawn = false;
       for (const it of items) {
         if (!monaDrawn && it.z < 0 && game.mona) { drawMona(game.mona, t); monaDrawn = true; }
